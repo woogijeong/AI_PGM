@@ -69,3 +69,262 @@
 1.  **언제 클래스를 쓰나요?** 단순히 작업을 수행하는 것이 아니라, 특정 데이터(상태)를 유지하고 관리해야 하는 객체를 만들 때 사용합니다.
 2.  **모듈화의 장점:** 코드를 기능별로 독립된 파일에 저장하면 오류 수정을 최소화하고 성능을 향상시킬 수 있습니다.
 3.  **표준 라이브러리 활용:** 파이썬 설치 시 기본으로 제공되는 `math`, `random` 같은 다양한 모듈과 패키지를 먼저 익히는 것이 좋습니다.
+
+
+# 파이썬 클래스와 모듈 — PLC/자동화 연계 정리
+
+## 1. 클래스 (Class)
+
+### 1-1. 클래스가 필요한 이유
+
+함수만으로는 "설비 하나"가 가진 여러 상태값(온도, 압력, 가동시간...)과 동작(시작, 정지, 체크)을 하나로 묶어서 관리하기 어렵습니다. 클래스는 이걸 하나의 "설계도"로 묶어줍니다.
+
+> **PLC 비유**: 클래스는 PLC의 **함수블록(FB, Function Block)**과 거의 같은 개념입니다. FB로 "실린더 하나"의 동작을 템플릿으로 만들어놓고 여러 개의 실린더에 재사용하듯, 클래스로 "설비 하나"의 틀을 만들어놓고 여러 설비 인스턴스에 재사용합니다.
+
+### 1-2. 기본 구조
+
+```python
+class 설비:
+    def __init__(self, 설비ID, 기준압력=100):
+        self.설비ID = 설비ID
+        self.기준압력 = 기준압력
+        self.가동중 = False
+        self.누적가동시간 = 0
+
+    def 시작(self):
+        self.가동중 = True
+        print(f"{self.설비ID} 가동 시작")
+
+    def 정지(self):
+        self.가동중 = False
+        print(f"{self.설비ID} 정지")
+
+    def 압력체크(self, 현재압력):
+        if 현재압력 > self.기준압력:
+            return f"{self.설비ID} 경고: 압력 초과 ({현재압력})"
+        return f"{self.설비ID} 정상"
+
+# 사용 - 실제 설비 여러 대를 각각의 객체(인스턴스)로 관리
+M01 = 설비('M01', 기준압력=100)
+M02 = 설비('M02', 기준압력=120)
+
+M01.시작()
+print(M01.압력체크(105))  # 경고
+print(M02.압력체크(105))  # 정상 (M02는 기준이 다름)
+```
+
+**핵심 포인트**: `self`는 "그 객체 자기 자신"을 가리킵니다. M01과 M02는 같은 설계도(클래스)로 만들었지만, 각자 독립적인 상태(가동중, 기준압력)를 가집니다 — PLC의 D레지스터가 실린더별로 따로 존재하는 것과 같은 원리입니다.
+
+### 1-3. 여러 설비를 리스트로 관리 (실전 패턴)
+
+```python
+설비목록 = [설비('M01', 100), 설비('M02', 120), 설비('M03', 90)]
+
+for 설비객체 in 설비목록:
+    설비객체.시작()
+    결과 = 설비객체.압력체크(105)
+    print(결과)
+```
+
+### 1-4. 상속 — 공통 기능은 부모, 다른 부분만 자식에서 재정의
+
+```python
+class 실린더:
+    def __init__(self, 이름):
+        self.이름 = 이름
+        self.상태 = '후진'
+
+    def 전진(self):
+        self.상태 = '전진'
+        print(f"{self.이름} 전진")
+
+class 양솔실린더(실린더):  # 실린더를 상속
+    def __init__(self, 이름):
+        super().__init__(이름)  # 부모 초기화 재사용
+        self.후진센서 = True
+
+    def 후진(self):  # 자식만의 추가 동작
+        self.상태 = '후진'
+        self.후진센서 = True
+        print(f"{self.이름} 후진 (양솔 방식)")
+
+실린더1 = 양솔실린더('CYL1')
+실린더1.전진()  # 부모 클래스 메서드 그대로 사용
+실린더1.후진()  # 자식 클래스 고유 메서드
+```
+
+이건 4실린더/2모터 같은 설비 구성에서 "실린더 종류별로 공통 동작은 재사용하고, 다른 부분만 따로 만드는" 상황에 딱 맞습니다.
+
+---
+
+## 2. 모듈 (Module)
+
+### 2-1. 모듈이 필요한 이유
+
+코드가 길어지면 한 파일에 다 넣기보다 기능별로 파일을 나누는 게 관리에 유리합니다.
+
+> **PLC 비유**: 모듈은 PLC 프로그램을 **프로그램 블록 단위(공통, 스텝제어, 알람 등)**로 나눠 관리하는 것과 같습니다. 자동화 설비 하나짜리 소규모 프로젝트는 상관없지만, 여러 설비/여러 기능을 다루기 시작하면 파일을 나누는 게 필수가 됩니다.
+
+### 2-2. 기본 사용법
+
+**폴더 구조 예시**
+```
+project/
+├── main.py
+├── equipment.py      # 설비 클래스 모아둔 모듈
+├── plc_comm.py        # PLC 통신 관련 함수 모듈
+└── logger.py           # 로그 저장 관련 함수 모듈
+```
+
+**equipment.py**
+```python
+class 설비:
+    def __init__(self, 설비ID, 기준압력=100):
+        self.설비ID = 설비ID
+        self.기준압력 = 기준압력
+
+    def 압력체크(self, 현재압력):
+        if 현재압력 > self.기준압력:
+            return "경고"
+        return "정상"
+```
+
+**logger.py**
+```python
+import csv
+import datetime
+
+def 로그_저장(파일명, 설비ID, 상태):
+    시간 = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with open(파일명, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow([시간, 설비ID, 상태])
+```
+
+**main.py — 모듈들을 가져와서 조립**
+```python
+from equipment import 설비
+from logger import 로그_저장
+
+M01 = 설비('M01', 기준압력=100)
+상태 = M01.압력체크(105)
+로그_저장('log.csv', 'M01', 상태)
+
+print(f"{M01.설비ID} 상태: {상태}")
+```
+
+### 2-3. 패키지 (모듈들의 폴더 묶음)
+
+모듈이 많아지면 폴더(패키지)로 한 번 더 묶습니다.
+
+```
+factory_system/
+├── __init__.py
+├── equipment/
+│   ├── __init__.py
+│   ├── cylinder.py
+│   └── motor.py
+├── communication/
+│   ├── __init__.py
+│   └── mc_protocol.py
+└── analysis/
+    ├── __init__.py
+    └── stats.py
+```
+
+```python
+from factory_system.equipment.cylinder import 실린더
+from factory_system.communication.mc_protocol import PLC연결
+```
+
+---
+
+## 3. 클래스 + 모듈을 PLC 자동화와 통합한 실전 구조
+
+### 3-1. 전체 아키텍처
+
+```
+plc_comm.py     → PLC와 통신 (읽기/쓰기 함수)
+equipment.py    → 설비/실린더/모터를 클래스로 모델링
+monitor.py      → 이상 감지 로직
+logger.py       → CSV/DB 저장
+main.py         → 위 모듈들을 조립해서 실제 루프 실행
+```
+
+### 3-2. 실전 예시 코드
+
+**equipment.py**
+```python
+class 설비:
+    def __init__(self, 설비ID, 정상사이클타임, 허용오차=0.5):
+        self.설비ID = 설비ID
+        self.정상사이클타임 = 정상사이클타임
+        self.허용오차 = 허용오차
+        self.이력 = []  # 이 설비의 사이클타임 이력 저장
+
+    def 사이클_기록(self, 사이클타임):
+        self.이력.append(사이클타임)
+
+    def 이상여부(self, 사이클타임):
+        return abs(사이클타임 - self.정상사이클타임) > self.허용오차
+
+    def 평균사이클(self):
+        if not self.이력:
+            return 0
+        return sum(self.이력) / len(self.이력)
+```
+
+**plc_comm.py** (실제로는 pymcprotocol 등으로 구현)
+```python
+def PLC_값읽기(디바이스주소):
+    # 실제로는 pymcprotocol 등으로 D레지스터/M코일 값을 읽어옴
+    # 여기서는 예시를 위해 임의값 반환
+    import random
+    return round(5.0 + random.uniform(-0.8, 0.8), 2)
+```
+
+**main.py — 전체 흐름 조립**
+```python
+from equipment import 설비
+from plc_comm import PLC_값읽기
+from logger import 로그_저장
+import time
+
+# 설비 객체 생성 (여러 대 관리)
+설비목록 = {
+    'M01': 설비('M01', 정상사이클타임=5.0),
+    'M02': 설비('M02', 정상사이클타임=4.5),
+}
+
+# 실시간 모니터링 루프 (개념 예시)
+for _ in range(10):
+    for 설비ID, 설비객체 in 설비목록.items():
+        사이클타임 = PLC_값읽기(설비ID)
+        설비객체.사이클_기록(사이클타임)
+
+        if 설비객체.이상여부(사이클타임):
+            print(f"⚠ {설비ID} 이상 감지: {사이클타임}s")
+            로그_저장('alarm_log.csv', 설비ID, '이상')
+        else:
+            로그_저장('normal_log.csv', 설비ID, '정상')
+
+    time.sleep(1)  # 실제로는 PLC 스캔 주기에 맞춤
+
+# 종료 후 통계 출력
+for 설비ID, 설비객체 in 설비목록.items():
+    print(f"{설비ID} 평균 사이클타임: {설비객체.평균사이클():.2f}s")
+```
+
+### 3-3. 이 구조가 주는 이점
+
+| 요소 | 얻는 것 |
+|---|---|
+| 클래스로 설비 모델링 | 설비 10대든 100대든 코드 중복 없이 관리 (PLC의 FB 재사용과 동일한 사고) |
+| 모듈로 기능 분리 | 통신 로직 바뀌어도 equipment.py는 안 건드려도 됨 (유지보수성↑) |
+| 결과적으로 | Pandas 분석, 머신러닝 예지보전까지 자연스럽게 확장 가능한 구조 완성 |
+
+### 3-4. 정리하면
+
+- **함수** = PLC의 서브루틴 한 동작
+- **클래스** = PLC의 함수블록(FB), 설비 하나의 완전한 모델
+- **모듈/패키지** = PLC 프로그램의 블록 단위 구성 (공통, 스텝제어, 알람 등)
